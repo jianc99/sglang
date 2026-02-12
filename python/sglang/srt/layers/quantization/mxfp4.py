@@ -532,7 +532,10 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             return
 
         if self.use_triton_kernels:
-
+            log_info_on_rank0(
+                logger,
+                f"Swizzling MoE weights for Triton Kernels MXFP4 moe kernel (layer: {self.prefix}), it might take a while...",
+            )
             from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig
 
             w13_weight_bias = layer.w13_weight_bias.to(torch.float32)
