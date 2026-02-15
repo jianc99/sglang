@@ -827,6 +827,13 @@ class Qwen3NextModel(nn.Module):
 
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.infer_count = 0
+        # For EAGLE3 support
+        self.layers_to_capture = []
+
+    def set_eagle3_layers_to_capture(self, layers_to_capture: list[int]):
+        self.layers_to_capture = layers_to_capture
+        for layer_id in self.layers_to_capture:
+            setattr(self.layers[layer_id], "_is_layer_to_capture", True)
 
     def forward(
         self,
@@ -846,6 +853,7 @@ class Qwen3NextModel(nn.Module):
             hidden_states = self.embed_tokens(input_ids)
 
         residual = None
+        aux_hidden_states = []
         for i in range(len(self.layers)):
             layer = self.layers[i]
             with get_global_expert_distribution_recorder().with_current_layer(i):
@@ -855,6 +863,11 @@ class Qwen3NextModel(nn.Module):
                     hidden_states=hidden_states,
                     residual=residual,
                     forward_batch=forward_batch,
+                    captured_last_layer_outputs=(
+                        aux_hidden_states
+                        if getattr(layer, "_is_layer_to_capture", False)
+                        else None
+                    ),
                 )
 
         if not forward_batch.forward_mode.is_idle():
@@ -863,7 +876,10 @@ class Qwen3NextModel(nn.Module):
             else:
                 hidden_states, _ = self.norm(hidden_states, residual)
 
-        return hidden_states
+        if len(aux_hidden_states) == 0:
+            return hidden_states
+
+        return hidden_states, aux_hidden_states
 
 
 class HybridLayerType(enum.Enum):
@@ -899,6 +915,8 @@ class Qwen3NextForCausalLM(nn.Module):
             use_attn_tp_group=get_global_server_args().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        # For EAGLE3 support
+        self.capture_aux_hidden_states = False
 
         self._routed_experts_weights_of_layer = LazyValue(
             lambda: {
@@ -923,8 +941,12 @@ class Qwen3NextForCausalLM(nn.Module):
     ):
         hidden_states = self.model(input_ids, positions, forward_batch, inputs_embeds)
 
+        aux_hidden_states = None
+        if self.capture_aux_hidden_states:
+            hidden_states, aux_hidden_states = hidden_states
+
         return self.logits_processor(
-            input_ids, hidden_states, self.lm_head, forward_batch
+            input_ids, hidden_states, self.lm_head, forward_batch, aux_hidden_states
         )
 
     def get_embed_and_head(self):
