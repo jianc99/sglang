@@ -1054,6 +1054,23 @@ class Qwen3NextForCausalLM(nn.Module):
             num_logical_experts=config.num_experts,
             num_groups=None,
         )
+        
+    def set_eagle3_layers_to_capture(self, layer_ids: Optional[list[int]] = None):
+        if not self.pp_group.is_last_rank:
+            return
+
+        self.capture_aux_hidden_states = True
+        if layer_ids is None:
+            num_layers = self.config.num_hidden_layers
+            self.model.set_eagle3_layers_to_capture(
+                [
+                    2,
+                    num_layers // 2,
+                    num_layers - 3,
+                ]
+            )  # Specific layers for EAGLE3 support
+        else:
+            self.model.set_eagle3_layers_to_capture([val + 1 for val in layer_ids])
 
 
 EntryClass = Qwen3NextForCausalLM
