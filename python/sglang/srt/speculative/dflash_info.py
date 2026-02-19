@@ -274,6 +274,15 @@ class DFlashVerifyInput(SpecInput):
                 self.custom_mask = mask
         return kv_indices, cum_kv_seq_len, qo_indptr, mask
 
+    def _sample(self, logits: torch.Tensor, temperature: float = 0.0) -> torch.Tensor:
+        if temperature < 1e-5:
+            return torch.argmax(logits, dim=-1)
+        vocab_size = logits.shape[-1]
+        logits = logits.view(-1, vocab_size)
+        logits = logits / temperature
+        probs = torch.softmax(logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1)
+
     def verify(
         self,
         *,
@@ -297,6 +306,10 @@ class DFlashVerifyInput(SpecInput):
         device = logits_output.next_token_logits.device
 
         candidates = self.draft_token.view(bs, self.draft_token_num)
+
+        # target_predict = self._sample(logits_output.next_token_logits, temperature=1.0).view(
+        #     bs, self.draft_token_num
+        # )
         target_predict = torch.argmax(logits_output.next_token_logits, dim=-1).view(
             bs, self.draft_token_num
         )
