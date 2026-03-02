@@ -393,6 +393,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             target_num_layers = getattr(
                 self.model_config.hf_config, "num_hidden_layers", None
             )
+            if target_num_layers is None and hasattr(self.model_config.hf_config, "text_config"):
+                target_num_layers = getattr(
+                    self.model_config.hf_config.text_config, "num_hidden_layers", None
+                )
             if target_num_layers is None:
                 raise ValueError(
                     "DFLASH requires target num_hidden_layers in config. "
