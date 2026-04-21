@@ -2467,7 +2467,7 @@ class ServerArgs:
                 self.speculative_num_draft_tokens = int(
                     self.speculative_dflash_block_size
                 )
-            
+
             if self.speculative_dflash_draft_window_size is not None:
                 w = int(self.speculative_dflash_draft_window_size)
                 if w <= 0:
@@ -2481,6 +2481,36 @@ class ServerArgs:
                         "DFLASH --speculative-dflash-draft-window-size must be >= "
                         "--speculative-num-draft-tokens (block_size). "
                         f"window_size={w}, block_size={draft_tokens}."
+                    )
+                try:
+                    from sglang.srt.utils.hf_transformers_utils import get_config
+
+                    model_override_args = json.loads(self.json_model_override_args)
+                    draft_hf_config = get_config(
+                        self.speculative_draft_model_path,
+                        trust_remote_code=self.trust_remote_code,
+                        revision=self.speculative_draft_model_revision,
+                        model_override_args=model_override_args,
+                    )
+                    layer_types = getattr(draft_hf_config, "layer_types", None) or []
+                    layer_types = list(layer_types)
+                    if (
+                        "sliding_attention" in layer_types
+                        and "full_attention" in layer_types
+                    ):
+                        raise ValueError(
+                            "Do not combine --speculative-dflash-draft-window-size "
+                            "with a mixed DFlash draft layer_types config. The global "
+                            "window would also clamp full_attention draft layers. "
+                            "Use the draft config's per-layer sliding_window instead."
+                        )
+                except ValueError:
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        "Failed to inspect DFLASH draft layer_types while validating "
+                        "--speculative-dflash-draft-window-size: %s",
+                        e,
                     )
 
             if self.speculative_num_draft_tokens is None:

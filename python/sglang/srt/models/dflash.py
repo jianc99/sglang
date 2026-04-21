@@ -33,6 +33,35 @@ from sglang.srt.speculative.dflash_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _get_dflash_layer_sliding_window_size(config, layer_id: int) -> int:
+    layer_types = getattr(config, "layer_types", None)
+    if layer_types is None:
+        return -1
+
+    if layer_id >= len(layer_types):
+        raise ValueError(
+            "DFlash draft config layer_types length does not match num_hidden_layers. "
+            f"layer_id={layer_id}, len(layer_types)={len(layer_types)}."
+        )
+
+    layer_type = layer_types[layer_id]
+    if layer_type == "full_attention":
+        return -1
+    if layer_type != "sliding_attention":
+        raise ValueError(
+            "Unsupported DFlash draft layer type. "
+            f"layer_types[{layer_id}]={layer_type!r}."
+        )
+
+    sliding_window = getattr(config, "sliding_window", None)
+    if sliding_window is None or int(sliding_window) <= 0:
+        raise ValueError(
+            "DFlash draft config uses sliding_attention but has no positive "
+            f"sliding_window. sliding_window={sliding_window!r}."
+        )
+    return int(sliding_window)
+
+
 class DFlashAttention(nn.Module):
     def __init__(self, config, layer_id: int) -> None:
         super().__init__()
@@ -107,6 +136,9 @@ class DFlashAttention(nn.Module):
         )
 
         self.scaling = head_dim**-0.5
+        self.sliding_window_size = _get_dflash_layer_sliding_window_size(
+            config, layer_id
+        )
         # DFlash uses non-causal attention over the draft block.
         self.attn = RadixAttention(
             num_heads=self.num_heads,
@@ -114,6 +146,7 @@ class DFlashAttention(nn.Module):
             scaling=self.scaling,
             num_kv_heads=self.num_kv_heads,
             layer_id=layer_id,
+            sliding_window_size=self.sliding_window_size,
             attn_type=AttentionType.ENCODER_ONLY,
         )
 
