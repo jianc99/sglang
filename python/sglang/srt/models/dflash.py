@@ -34,6 +34,21 @@ from sglang.srt.speculative.dflash_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _get_dflash_layer_attention_params(
+    config, layer_id: int
+) -> Tuple[int, AttentionType]:
+    layer_types = getattr(config, "layer_types", None)
+    if layer_types is None or layer_types[layer_id] == "full_attention":
+        return -1, AttentionType.ENCODER_ONLY
+
+    if layer_types[layer_id] == "sliding_attention":
+        return int(config.sliding_window) - 1, AttentionType.DECODER
+    raise ValueError(
+        "Unsupported DFlash draft layer type. "
+        f"layer_types[{layer_id}]={layer_types[layer_id]!r}."
+    )
+
+
 class DFlashAttention(nn.Module):
     def __init__(self, config, layer_id: int) -> None:
         super().__init__()
@@ -108,14 +123,17 @@ class DFlashAttention(nn.Module):
         )
 
         self.scaling = head_dim**-0.5
-        # DFlash uses non-causal attention over the draft block.
+        self.sliding_window_size, self.attn_type = _get_dflash_layer_attention_params(
+            config, layer_id
+        )
         self.attn = RadixAttention(
             num_heads=self.num_heads,
             head_dim=head_dim,
             scaling=self.scaling,
             num_kv_heads=self.num_kv_heads,
             layer_id=layer_id,
-            attn_type=AttentionType.ENCODER_ONLY,
+            sliding_window_size=self.sliding_window_size,
+            attn_type=self.attn_type,
         )
 
     def forward(
@@ -291,6 +309,11 @@ class DFlashDraftModel(nn.Module):
         self.hidden_norm = RMSNorm(hidden_size, eps=rms_norm_eps)
 
         self.block_size = draft_config.resolve_block_size(default=16)
+
+    def get_attention_sliding_window_size(self):
+        if "sliding_attention" not in getattr(self.config, "layer_types", ()):
+            return None
+        return int(self.config.sliding_window) - 1
 
     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
         """Project concatenated target-layer hidden states into draft hidden_size."""
