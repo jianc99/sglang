@@ -598,9 +598,7 @@ class FlashInferAttnBackend(AttentionBackend):
         elif forward_mode.is_target_verify():
             # FlashInfer's prefill wrapper decides mask mode based on whether
             # `custom_mask_buf` is initialized (not whether a custom mask is provided).
-            # For cases like DFLASH draft (ENCODER_ONLY / non-causal) we do NOT use a
-            # custom mask, so we must avoid initializing `custom_mask_buf`, otherwise
-            # FlashInfer will treat the (zero) buffer as a real mask and block attention.
+            # DFlash relies on layer causal/window metadata instead of a custom mask.
             use_custom_mask = (
                 spec_info is not None
                 and getattr(spec_info, "custom_mask", None) is not None
@@ -1299,6 +1297,16 @@ class FlashInferIndicesUpdaterPrefill:
         fixed_split_size: Optional[int] = None,
         multi_item_params: Optional[MultiItemScoringParams] = None,
     ):
+        if prefix_lens is None:
+            accept_length = getattr(spec_info, "accept_length", None)
+            prefix_lens = (
+                seq_lens
+                if accept_length is None
+                else seq_lens
+                - accept_length[: seq_lens.shape[0]].to(
+                    device=seq_lens.device, dtype=seq_lens.dtype
+                )
+            )
         for wrapper_id in range(2):
             if wrapper_id == 0:
                 # window attention use paged only
