@@ -138,14 +138,19 @@ class MinimaxM2Detector(BaseFormatDetector):
         Returns:
             The converted value
         """
-        if value.lower() == "null":
-            return None
-
         # Normalize types
         normalized_types = [t.lower() for t in param_types]
+        normalized_value = value.strip().lower()
 
-        # Try null first if it's in the list
-        if "null" in normalized_types or value.lower() in ("null", "none", "nil"):
+        # Only emit JSON null when the schema actually allows null. MiniMax can
+        # output textual "none" for string enums where "none" is the valid value.
+        if normalized_value == "null" and "null" in normalized_types:
+            return None
+        if (
+            normalized_value in ("none", "nil")
+            and "null" in normalized_types
+            and "string" not in normalized_types
+        ):
             return None
 
         # Try each type in order of preference (most specific first, string as fallback)
@@ -222,6 +227,81 @@ class MinimaxM2Detector(BaseFormatDetector):
             return ["string"]
 
         return self._extract_types_from_schema(param_schema)
+
+    def _schema_allows_null(self, schema: Any) -> bool:
+        if not isinstance(schema, dict):
+            return False
+
+        type_value = schema.get("type")
+        if type_value == "null":
+            return True
+        if isinstance(type_value, list) and "null" in type_value:
+            return True
+
+        enum_values = schema.get("enum")
+        if isinstance(enum_values, list) and None in enum_values:
+            return True
+
+        for choice_field in ("anyOf", "oneOf", "allOf"):
+            choices = schema.get(choice_field)
+            if isinstance(choices, list) and any(
+                self._schema_allows_null(choice) for choice in choices
+            ):
+                return True
+
+        return False
+
+    def _get_string_enum_value(self, schema: Any, value: str) -> Any:
+        if not isinstance(schema, dict):
+            return None
+
+        enum_values = schema.get("enum")
+        if isinstance(enum_values, list):
+            for enum_value in enum_values:
+                if isinstance(enum_value, str) and enum_value.lower() == value:
+                    return enum_value
+
+        for choice_field in ("anyOf", "oneOf", "allOf"):
+            choices = schema.get(choice_field)
+            if not isinstance(choices, list):
+                continue
+            for choice in choices:
+                enum_value = self._get_string_enum_value(choice, value)
+                if enum_value is not None:
+                    return enum_value
+
+        return None
+
+    def _normalize_value_for_schema(self, value: Any, schema: Any) -> Any:
+        if not isinstance(schema, dict):
+            return value
+
+        if value is None:
+            none_value = self._get_string_enum_value(schema, "none")
+            if none_value is not None and not self._schema_allows_null(schema):
+                return none_value
+            return value
+
+        if isinstance(value, dict):
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                return {
+                    key: self._normalize_value_for_schema(
+                        item_value, properties.get(key)
+                    )
+                    for key, item_value in value.items()
+                }
+            return value
+
+        if isinstance(value, list):
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                return [
+                    self._normalize_value_for_schema(item_value, item_schema)
+                    for item_value in value
+                ]
+
+        return value
 
     def parse_streaming_increment(
         self, new_text: str, tools: List[Tool]
@@ -505,15 +585,25 @@ class MinimaxM2Detector(BaseFormatDetector):
         self, fname: str, pname: str, pval: str, tools: List[Tool]
     ) -> Any:
         param_config = {}
+        param_schema = {}
         for tool in tools:
             if tool.function.name == fname and tool.function.parameters is not None:
                 parameters = tool.function.parameters
                 if isinstance(parameters, dict) and "properties" in parameters:
                     param_config = parameters["properties"]
+                    if isinstance(param_config.get(pname), dict):
+                        param_schema = param_config[pname]
                     break
 
         param_type = self._get_param_types_from_config(pname, param_config)
-        return self._convert_param_value_with_types(pval, param_type)
+        normalized_value = pval.strip().lower()
+        if normalized_value == "null":
+            none_value = self._get_string_enum_value(param_schema, "none")
+            if none_value is not None and not self._schema_allows_null(param_schema):
+                return none_value
+
+        value = self._convert_param_value_with_types(pval, param_type)
+        return self._normalize_value_for_schema(value, param_schema)
 
     def supports_structural_tag(self) -> bool:
         return False

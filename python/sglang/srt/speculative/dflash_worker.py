@@ -135,6 +135,13 @@ class DFlashWorker:
         draft_server_args.prefill_attention_backend = None
         draft_server_args.decode_attention_backend = None
         draft_server_args.attention_backend = draft_backend
+        if draft_backend in ("fa3", "fa4") and draft_server_args.kv_cache_dtype in (
+            "auto",
+            "fp8_e4m3",
+            "fp8_e5m2",
+            "fp4_e2m1",
+        ):
+            draft_server_args.kv_cache_dtype = "bfloat16"
         # Keep draft context length aligned with the target.
         draft_server_args.context_length = (
             target_worker.model_runner.model_config.context_len

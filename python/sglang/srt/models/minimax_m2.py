@@ -1227,7 +1227,11 @@ class MiniMaxM2ForCausalLM(nn.Module):
         # For EAGLE3
         self.capture_aux_hidden_states = False
 
-    def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def get_input_embeddings(
+        self, input_ids: Optional[torch.Tensor] = None
+    ) -> Union[nn.Embedding, torch.Tensor]:
+        if input_ids is None:
+            return self.model.embed_tokens
         return self.model.get_input_embeddings(input_ids)
 
     def set_eagle3_layers_to_capture(self, layer_ids: Optional[list[int]] = None):
@@ -1244,6 +1248,18 @@ class MiniMaxM2ForCausalLM(nn.Module):
             ]  # Specific layers for EAGLE3 support
         else:
             self.model.layers_to_capture = [val + 1 for val in layer_ids]
+
+    def set_dflash_layers_to_capture(self, layer_ids: List[int]):
+        if not get_pp_group().is_last_rank:
+            return
+
+        if layer_ids is None:
+            raise ValueError(
+                "DFLASH requires explicit layer_ids for aux hidden capture."
+            )
+
+        self.capture_aux_hidden_states = True
+        self.model.layers_to_capture = [val + 1 for val in layer_ids]
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
