@@ -595,6 +595,7 @@ class ServerArgs:
     speculative_token_map: Optional[str] = None
     speculative_attention_mode: str = "prefill"
     speculative_draft_attention_backend: Optional[str] = None
+    speculative_draft_kv_cache_dtype: Optional[str] = None
     speculative_draft_window_size: Optional[int] = None
     speculative_moe_runner_backend: Optional[str] = None
     speculative_moe_a2a_backend: Optional[str] = None
@@ -4453,6 +4454,12 @@ class ServerArgs:
             help="Enable the multimodal functionality for the served model. If the model being served is not multimodal, nothing will happen",
         )
         parser.add_argument(
+            "--disable-multimodal",
+            dest="enable_multimodal",
+            action="store_false",
+            help="Disable the multimodal functionality for the served model.",
+        )
+        parser.add_argument(
             "--revision",
             type=str,
             default=None,
@@ -5755,6 +5762,25 @@ class ServerArgs:
             type=str,
             help="Attention backend for speculative decoding drafting.",
             default=ServerArgs.speculative_draft_attention_backend,
+        )
+        parser.add_argument(
+            "--speculative-draft-kv-cache-dtype",
+            type=str,
+            choices=[
+                "auto",
+                "fp8_e5m2",
+                "fp8_e4m3",
+                "bf16",
+                "bfloat16",
+                "fp4_e2m1",
+            ],
+            help=(
+                "Data type for speculative draft model KV cache storage. "
+                "If unset, the draft model inherits --kv-cache-dtype except for "
+                "DFLASH with fa4 draft attention, which uses bfloat16 because fa4 "
+                "does not support FP8 draft KV cache."
+            ),
+            default=ServerArgs.speculative_draft_kv_cache_dtype,
         )
         parser.add_argument(
             "--speculative-draft-window-size",

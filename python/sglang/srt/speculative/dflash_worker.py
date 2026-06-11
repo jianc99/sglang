@@ -50,6 +50,34 @@ def _get_fused_kv_materialize_helper():
     return _FusedKVMaterializeHelper
 
 
+def _resolve_dflash_draft_kv_cache_dtype(
+    draft_server_args: ServerArgs, draft_backend: str
+) -> str:
+    draft_kv_cache_dtype = draft_server_args.speculative_draft_kv_cache_dtype
+    if draft_backend == "fa4":
+        if draft_kv_cache_dtype in (None, "auto"):
+            if draft_server_args.kv_cache_dtype not in ("bf16", "bfloat16"):
+                logger.info(
+                    "DFLASH draft worker uses fa4; overriding draft KV cache dtype "
+                    "from %s to bfloat16.",
+                    draft_server_args.kv_cache_dtype,
+                )
+            return "bfloat16"
+        if draft_kv_cache_dtype not in ("bf16", "bfloat16"):
+            raise ValueError(
+                "DFLASH draft worker with fa4 attention requires "
+                "--speculative-draft-kv-cache-dtype=bfloat16 because fa4 does not "
+                f"support {draft_kv_cache_dtype} draft KV cache."
+            )
+        return draft_kv_cache_dtype
+
+    return (
+        draft_kv_cache_dtype
+        if draft_kv_cache_dtype is not None
+        else draft_server_args.kv_cache_dtype
+    )
+
+
 class DFlashWorker:
     """DFlash speculative decoding worker (spec-v1, tp>=1/pp=1)."""
 
@@ -137,6 +165,9 @@ class DFlashWorker:
         draft_server_args.prefill_attention_backend = None
         draft_server_args.decode_attention_backend = None
         draft_server_args.attention_backend = draft_backend
+        draft_server_args.kv_cache_dtype = _resolve_dflash_draft_kv_cache_dtype(
+            draft_server_args, draft_backend
+        )
         # Keep draft context length aligned with the target.
         draft_server_args.context_length = (
             target_worker.model_runner.model_config.context_len
@@ -191,8 +222,9 @@ class DFlashWorker:
         )
         if self.tp_rank == 0:
             logger.info(
-                "Initialized DFLASH draft runner. attention_backend=%s, model=%s, block_size=%s, draft_window_size=%s, compact_cache=%s",
+                "Initialized DFLASH draft runner. attention_backend=%s, kv_cache_dtype=%s, model=%s, block_size=%s, draft_window_size=%s, compact_cache=%s",
                 getattr(draft_server_args, "attention_backend", None),
+                getattr(draft_server_args, "kv_cache_dtype", None),
                 self.draft_model.__class__.__name__,
                 self.block_size,
                 self.draft_window_size,
